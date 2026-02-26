@@ -14,6 +14,8 @@ import com.qtiqo.share.data.local.entity.UploadEntity
 import com.qtiqo.share.data.prefs.SettingsStore
 import com.qtiqo.share.data.remote.api.FilesApi
 import com.qtiqo.share.data.remote.api.PublicApi
+import com.qtiqo.share.data.remote.dto.CompleteFileUploadRequest
+import com.qtiqo.share.data.remote.dto.InitFileUploadRequest
 import com.qtiqo.share.domain.model.FilePrivacy
 import com.qtiqo.share.domain.model.PublicFileView
 import com.qtiqo.share.domain.model.UploadStatus
@@ -27,6 +29,12 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.runBlocking
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody
+import okio.BufferedSink
 
 data class AdminStats(
     val users: Int,
@@ -45,7 +53,8 @@ class UploadRepository @Inject constructor(
     private val settingsStore: SettingsStore,
     private val filesApi: FilesApi,
     private val publicApi: PublicApi,
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val okHttpClient: OkHttpClient
 ) {
     fun observeUploads(): Flow<List<UploadEntity>> = uploadDao.observeAll()
 
@@ -134,7 +143,8 @@ class UploadRepository @Inject constructor(
         if (settingsStore.useFakeBackend.value) {
             fakeBackend.getFile(uploadId)?.apply { this.privacy = privacy.name }
         } else {
-            runCatching { filesApi.patchFile(uploadId, com.qtiqo.share.data.remote.dto.PatchFileRequest(privacy = privacy.name)) }
+            val remoteId = current.remoteFileId ?: current.id
+            runCatching { filesApi.patchFile(remoteId, com.qtiqo.share.data.remote.dto.PatchFileRequest(privacy = privacy.name)) }
         }
     }
 
@@ -145,7 +155,8 @@ class UploadRepository @Inject constructor(
         if (settingsStore.useFakeBackend.value) {
             fakeBackend.getFile(uploadId)?.apply { this.downloadEnabled = enabled }
         } else {
-            runCatching { filesApi.patchFile(uploadId, com.qtiqo.share.data.remote.dto.PatchFileRequest(downloadEnabled = enabled)) }
+            val remoteId = current.remoteFileId ?: current.id
+            runCatching { filesApi.patchFile(remoteId, com.qtiqo.share.data.remote.dto.PatchFileRequest(downloadEnabled = enabled)) }
         }
     }
 
@@ -154,7 +165,8 @@ class UploadRepository @Inject constructor(
         if (settingsStore.useFakeBackend.value) {
             fakeBackend.revoke(uploadId)
         } else {
-            runCatching { filesApi.revoke(uploadId) }
+            val remoteId = current.remoteFileId ?: current.id
+            runCatching { filesApi.revoke(remoteId) }
         }
         uploadDao.upsert(
             current.copy(
@@ -170,7 +182,7 @@ class UploadRepository @Inject constructor(
             val record = fakeBackend.regenerate(uploadId)
             record.shareToken to shareUrlForToken(record.shareToken)
         } else {
-            val response = filesApi.regenerate(uploadId)
+            val response = filesApi.regenerate(current.remoteFileId ?: uploadId)
             response.shareToken to response.shareUrl
         }
         uploadDao.upsert(
@@ -233,7 +245,7 @@ class UploadRepository @Inject constructor(
         if (settingsStore.useFakeBackend.value) {
             simulateFakeUpload(entity, onProgress)
         } else {
-            performRealUploadPlaceholder(entity, onProgress)
+            performRealUpload(entity, onProgress)
         }
     }
 
@@ -286,27 +298,77 @@ class UploadRepository @Inject constructor(
         )
     }
 
-    private suspend fun performRealUploadPlaceholder(
+    private suspend fun performRealUpload(
         entity: UploadEntity,
         onProgress: suspend (Int) -> Unit
     ) {
+        val init = filesApi.initUpload(
+            InitFileUploadRequest(
+                fileName = entity.fileName,
+                mimeType = entity.mimeType,
+                sizeBytes = entity.sizeBytes,
+                privacy = entity.privacy.name,
+                downloadEnabled = entity.downloadEnabled
+            )
+        )
+        uploadBinaryToSignedUrl(entity, init.uploadUrl, onProgress)
+        filesApi.completeUpload(CompleteFileUploadRequest(fileId = init.fileId))
+        val completedAt = System.currentTimeMillis()
+        val current = uploadDao.getById(entity.id) ?: return
+        uploadDao.upsert(
+            current.copy(
+                status = UploadStatus.DONE,
+                progress = 100,
+                shareToken = init.shareToken,
+                shareUrl = shareUrlForToken(init.shareToken),
+                uploadedAt = completedAt,
+                updatedAt = completedAt,
+                revoked = false,
+                remoteFileId = init.fileId,
+                errorMessage = null
+            )
+        )
+        onProgress(100)
+    }
+
+    private suspend fun uploadBinaryToSignedUrl(
+        entity: UploadEntity,
+        uploadUrl: String,
+        onProgress: suspend (Int) -> Unit
+    ) {
         val uri = Uri.parse(entity.localUri)
-        contentResolver.openInputStream(uri)?.use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER)
-            var totalRead = 0L
-            val totalBytes = entity.sizeBytes.takeIf { it > 0 } ?: 1L
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                totalRead += read
-                val progress = ((totalRead.toDouble() / totalBytes.toDouble()) * 100).roundToInt().coerceIn(1, 99)
-                onProgress(progress)
-                val current = uploadDao.getById(entity.id) ?: return
-                uploadDao.upsert(current.copy(status = UploadStatus.UPLOADING, progress = progress, updatedAt = System.currentTimeMillis()))
-                delay(30)
+        val totalBytes = entity.sizeBytes.takeIf { it > 0 } ?: error("Unknown file size")
+        val requestBody = object : RequestBody() {
+            override fun contentType() = entity.mimeType?.toMediaTypeOrNull()
+            override fun contentLength(): Long = totalBytes
+            override fun writeTo(sink: BufferedSink) {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER)
+                    var uploaded = 0L
+                    var lastProgress = -1
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        sink.write(buffer, 0, read)
+                        uploaded += read
+                        val progress = ((uploaded.toDouble() / totalBytes.toDouble()) * 100).roundToInt().coerceIn(1, 99)
+                        if (progress != lastProgress) {
+                            lastProgress = progress
+                            runBlocking { onProgress(progress) }
+                        }
+                    }
+                } ?: error("Unable to read file")
             }
-        } ?: error("Unable to read file")
-        throw UnsupportedOperationException("Real backend upload flow is defined but not connected in MVP demo. Enable FakeBackend in Settings.")
+        }
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .put(requestBody)
+            .build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                error("Upload failed with HTTP ${response.code}")
+            }
+        }
     }
 
     suspend fun markFailed(uploadId: String, message: String?) {
