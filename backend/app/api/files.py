@@ -45,6 +45,12 @@ def file_to_dto(file: File) -> FileDto:
     )
 
 
+def scoped_file_query(user: User):
+    if user.role == "ADMIN":
+        return select(File)
+    return select(File).where(File.owner_id == user.id)
+
+
 @router.post("/init", response_model=InitFileUploadResponse)
 def init_upload(request: InitFileUploadRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if request.sizeBytes > user.max_upload_size_bytes:
@@ -112,7 +118,7 @@ def list_files(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = select(File).where(File.owner_id == user.id)
+    q = scoped_file_query(user)
     if search:
         q = q.where(File.filename.ilike(f"%{search}%"))
     if filter:
@@ -132,7 +138,10 @@ def list_files(
 
 @router.get("/{file_id}", response_model=FileDto)
 def get_file(file_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    file = db.scalar(select(File).where(File.id == file_id, File.owner_id == user.id))
+    q = select(File).where(File.id == file_id)
+    if user.role != "ADMIN":
+        q = q.where(File.owner_id == user.id)
+    file = db.scalar(q)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     return file_to_dto(file)
@@ -140,7 +149,10 @@ def get_file(file_id: str, db: Session = Depends(get_db), user: User = Depends(g
 
 @router.patch("/{file_id}", response_model=FileDto)
 def patch_file(file_id: str, request: PatchFileRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    file = db.scalar(select(File).where(File.id == file_id, File.owner_id == user.id))
+    q = select(File).where(File.id == file_id)
+    if user.role != "ADMIN":
+        q = q.where(File.owner_id == user.id)
+    file = db.scalar(q)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     if request.privacy is not None:
@@ -154,7 +166,10 @@ def patch_file(file_id: str, request: PatchFileRequest, db: Session = Depends(ge
 
 @router.post("/{file_id}/revoke", response_model=RevokeRegenerateResponse)
 def revoke(file_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    file = db.scalar(select(File).where(File.id == file_id, File.owner_id == user.id))
+    q = select(File).where(File.id == file_id)
+    if user.role != "ADMIN":
+        q = q.where(File.owner_id == user.id)
+    file = db.scalar(q)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     file.revoked = True
@@ -164,7 +179,10 @@ def revoke(file_id: str, db: Session = Depends(get_db), user: User = Depends(get
 
 @router.post("/{file_id}/regenerate", response_model=RevokeRegenerateResponse)
 def regenerate(file_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    file = db.scalar(select(File).where(File.id == file_id, File.owner_id == user.id))
+    q = select(File).where(File.id == file_id)
+    if user.role != "ADMIN":
+        q = q.where(File.owner_id == user.id)
+    file = db.scalar(q)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     file.share_token = random_token(16)

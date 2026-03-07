@@ -1,0 +1,12 @@
+{
+    email admin@qtiqo.com
+}
+
+imagelink.qtiqo.com {
+    reverse_proxy api:8080
+    encode gzip
+}
+
+http://localhost {
+    reverse_proxy api:8080
+}

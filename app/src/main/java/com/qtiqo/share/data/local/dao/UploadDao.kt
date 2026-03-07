@@ -10,8 +10,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface UploadDao {
-    @Query("SELECT * FROM uploads ORDER BY createdAt DESC")
-    fun observeAll(): Flow<List<UploadEntity>>
+    @Query("SELECT * FROM uploads WHERE ownerIdentifier = :ownerIdentifier ORDER BY createdAt DESC")
+    fun observeAll(ownerIdentifier: String): Flow<List<UploadEntity>>
 
     @Query("SELECT * FROM uploads WHERE id = :id LIMIT 1")
     fun observeById(id: String): Flow<UploadEntity?>
@@ -34,9 +34,9 @@ interface UploadDao {
     @Query("DELETE FROM uploads WHERE id = :id")
     suspend fun deleteById(id: String)
 
-    @Query("SELECT COUNT(*) FROM uploads")
-    fun observeCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM uploads WHERE ownerIdentifier = :ownerIdentifier")
+    fun observeCount(ownerIdentifier: String): Flow<Int>
 
-    @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM uploads")
-    fun observeTotalSize(): Flow<Long>
+    @Query("SELECT COALESCE(SUM(sizeBytes), 0) FROM uploads WHERE ownerIdentifier = :ownerIdentifier")
+    fun observeTotalSize(ownerIdentifier: String): Flow<Long>
 }

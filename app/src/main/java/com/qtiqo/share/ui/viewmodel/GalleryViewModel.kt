@@ -63,7 +63,9 @@ class GalleryViewModel @Inject constructor(
     fun setFilter(value: GalleryFilter) { filter.value = value }
     fun setSort(value: GallerySort) { sort.value = value }
 
-    fun cancelUpload(id: String) = uploadRepository.cancelUpload(id)
+    fun cancelUpload(id: String) {
+        viewModelScope.launch { uploadRepository.cancelAndRemoveUpload(id) }
+    }
     fun retryUpload(id: String) = uploadRepository.retryUpload(id)
 
     fun deleteUpload(id: String) {

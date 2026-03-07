@@ -8,6 +8,7 @@ import com.qtiqo.share.domain.model.UploadStatus
 @Entity(tableName = "uploads")
 data class UploadEntity(
     @PrimaryKey val id: String,
+    val ownerIdentifier: String,
     val localUri: String,
     val fileName: String,
     val mimeType: String?,

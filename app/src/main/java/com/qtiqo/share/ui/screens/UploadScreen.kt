@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -102,7 +103,14 @@ fun UploadScreen(
                         } else if (item.status == UploadStatus.FAILED || item.status == UploadStatus.CANCELED) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text(item.status.name, color = MaterialTheme.colorScheme.error)
-                                IconButton(onClick = { viewModel.retryUpload(item.id) }) { Icon(Icons.Default.Refresh, contentDescription = "Retry") }
+                                Row {
+                                    IconButton(onClick = { viewModel.retryUpload(item.id) }) {
+                                        Icon(Icons.Default.Refresh, contentDescription = "Retry")
+                                    }
+                                    IconButton(onClick = { viewModel.deleteUpload(item.id) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Remove")
+                                    }
+                                }
                             }
                         } else {
                             Text(if (item.shareUrl != null) "Link ready" else item.status.name)

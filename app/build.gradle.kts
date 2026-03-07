@@ -1,3 +1,6 @@
+import java.util.Properties
+import org.gradle.api.GradleException
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -8,6 +11,24 @@ plugins {
     kotlin("kapt")
 }
 
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+
+fun requireKeystoreProp(name: String): String {
+    val value = keystoreProperties.getProperty(name)?.trim()
+    if (value.isNullOrEmpty()) {
+        throw GradleException("Missing keystore property '$name' in ${keystorePropertiesFile.absolutePath}")
+    }
+    return value
+}
+
+val isReleaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.contains("Release", ignoreCase = true)
+}
+
 android {
     namespace = "com.qtiqo.share"
     compileSdk = 35
@@ -16,8 +37,8 @@ android {
         applicationId = "com.qtiqo.share"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 10
+        versionName = "1.0.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -25,9 +46,34 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                val storeFilePath = requireKeystoreProp("storeFile")
+                storeFile = rootProject.file(storeFilePath)
+                if (!storeFile!!.exists()) {
+                    throw GradleException("Release keystore file not found: ${storeFile!!.absolutePath}")
+                }
+                storePassword = requireKeystoreProp("storePassword")
+                keyAlias = requireKeystoreProp("keyAlias")
+                keyPassword = requireKeystoreProp("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning != null) {
+                signingConfig = releaseSigning
+            } else if (isReleaseTaskRequested) {
+                throw GradleException(
+                    "Release signing is not configured. Create keystore.properties in project root and add your upload keystore."
+                )
+            }
+            buildConfigField("boolean", "DEFAULT_FAKE_BACKEND", "false")
+            buildConfigField("boolean", "ALLOW_FAKE_BACKEND_TOGGLE", "false")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -36,6 +82,8 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            buildConfigField("boolean", "DEFAULT_FAKE_BACKEND", "false")
+            buildConfigField("boolean", "ALLOW_FAKE_BACKEND_TOGGLE", "true")
         }
     }
 

@@ -53,6 +53,11 @@ class UploadViewModel @Inject constructor(
     }
 
     fun clearError() { _error.value = null }
-    fun cancelUpload(id: String) = uploadRepository.cancelUpload(id)
+    fun cancelUpload(id: String) {
+        viewModelScope.launch { uploadRepository.cancelAndRemoveUpload(id) }
+    }
     fun retryUpload(id: String) = uploadRepository.retryUpload(id)
+    fun deleteUpload(id: String) {
+        viewModelScope.launch { uploadRepository.deleteUpload(id) }
+    }
 }

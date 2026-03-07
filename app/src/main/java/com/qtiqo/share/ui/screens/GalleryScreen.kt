@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilePresent
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
@@ -137,7 +138,8 @@ fun GalleryScreen(
                         item = item,
                         onClick = { onOpenDetail(item.id) },
                         onCancel = { viewModel.cancelUpload(item.id) },
-                        onRetry = { viewModel.retryUpload(item.id) }
+                        onRetry = { viewModel.retryUpload(item.id) },
+                        onDelete = { viewModel.deleteUpload(item.id) }
                     )
                 }
             }
@@ -204,7 +206,8 @@ private fun UploadGridCard(
     item: UploadEntity,
     onClick: () -> Unit,
     onCancel: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onDelete: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -241,7 +244,10 @@ private fun UploadGridCard(
                 UploadStatus.FAILED, UploadStatus.CANCELED -> {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(item.status.name, color = MaterialTheme.colorScheme.error)
-                        IconButton(onClick = onRetry) { Icon(Icons.Default.Refresh, contentDescription = "Retry") }
+                        Row {
+                            IconButton(onClick = onRetry) { Icon(Icons.Default.Refresh, contentDescription = "Retry") }
+                            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, contentDescription = "Remove") }
+                        }
                     }
                 }
                 UploadStatus.DONE -> {

@@ -25,6 +25,24 @@ fun resolveFileMeta(context: Context, uri: Uri): FileMeta {
                 if (sizeIndex >= 0) size = cursor.getLong(sizeIndex)
             }
         }
+    if (size <= 0L) {
+        resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+            if (descriptor.length > 0L) size = descriptor.length
+        }
+    }
+    if (size <= 0L) {
+        resolver.openInputStream(uri)?.use { input ->
+            val buffer = ByteArray(8 * 1024)
+            var total = 0L
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+            }
+            if (total > 0L) size = total
+        }
+    }
+    require(size > 0L) { "Unable to determine file size for selected file" }
     return FileMeta(
         uri = uri,
         name = name,

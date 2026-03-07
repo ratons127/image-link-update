@@ -3,6 +3,7 @@ package com.qtiqo.share.data.repo
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -27,6 +28,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.runBlocking
@@ -56,13 +58,16 @@ class UploadRepository @Inject constructor(
     private val authRepository: AuthRepository,
     private val okHttpClient: OkHttpClient
 ) {
-    fun observeUploads(): Flow<List<UploadEntity>> = uploadDao.observeAll()
+    fun observeUploads(): Flow<List<UploadEntity>> = authRepository.sessionFlow.flatMapLatest { session ->
+        val ownerIdentifier = session?.identifier ?: ""
+        uploadDao.observeAll(ownerIdentifier)
+    }
 
     fun observeUpload(id: String): Flow<UploadEntity?> = uploadDao.observeById(id)
 
     fun observeAdminStats(): Flow<AdminStats> = combine(
-        uploadDao.observeCount(),
-        uploadDao.observeTotalSize(),
+        authRepository.sessionFlow.flatMapLatest { session -> uploadDao.observeCount(session?.identifier ?: "") },
+        authRepository.sessionFlow.flatMapLatest { session -> uploadDao.observeTotalSize(session?.identifier ?: "") },
         authRepository.sessionFlow
     ) { count, size, _ ->
         AdminStats(
@@ -86,6 +91,7 @@ class UploadRepository @Inject constructor(
         uploadDao.upsert(
             UploadEntity(
                 id = id,
+                ownerIdentifier = authRepository.sessionFlow.value?.identifier ?: "",
                 localUri = uri.toString(),
                 fileName = fileName,
                 mimeType = mimeType,
@@ -111,11 +117,17 @@ class UploadRepository @Inject constructor(
             .setInputData(workDataOf(UploadWorker.KEY_UPLOAD_ID to uploadId))
             .addTag(uploadTag(uploadId))
             .build()
+        Log.d("UploadRepository", "Enqueue uploadId=$uploadId requestId=${request.id}")
         workManager.enqueueUniqueWork(uploadWorkName(uploadId), ExistingWorkPolicy.REPLACE, request)
     }
 
     fun cancelUpload(uploadId: String) {
         workManager.cancelUniqueWork(uploadWorkName(uploadId))
+    }
+
+    suspend fun cancelAndRemoveUpload(uploadId: String) {
+        cancelUpload(uploadId)
+        uploadDao.deleteById(uploadId)
     }
 
     suspend fun markCanceled(uploadId: String) {
@@ -384,10 +396,18 @@ class UploadRepository @Inject constructor(
 
     suspend fun markProgress(uploadId: String, progress: Int) {
         val current = uploadDao.getById(uploadId) ?: return
+        if (current.status == UploadStatus.DONE || current.status == UploadStatus.FAILED || current.status == UploadStatus.CANCELED) {
+            return
+        }
+        val normalized = progress.coerceIn(0, 100)
+        if (normalized >= 100) {
+            // Terminal state is set by upload completion logic; avoid reverting DONE back to UPLOADING.
+            return
+        }
         uploadDao.upsert(
             current.copy(
                 status = UploadStatus.UPLOADING,
-                progress = progress.coerceIn(0, 100),
+                progress = normalized,
                 updatedAt = System.currentTimeMillis()
             )
         )
